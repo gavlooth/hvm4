@@ -247,8 +247,29 @@ __attribute__((hot)) fn Term wnf(Term term) {
       case MAT:
       case SWI:
       case USE:
-      case INC:
+      case INC: {
+        whnf = next;
+        goto apply;
+      }
+
       case C00 ... C16: {
+        // Check for FFI node dispatch (OmniLisp extension)
+        #ifdef OMNI_FFI_DISPATCH_HOOK
+        // CRITICAL: Save and update WNF_S_POS before calling hook.
+        // The hook may call nested wnf() which reads WNF_S_POS to set its base.
+        // Without this, nested wnf() would start with base=0 and could pop
+        // frames that belong to this outer wnf() evaluation.
+        u32 saved_s_pos = WNF_S_POS;
+        WNF_S_POS = s_pos;
+        Term dispatched = OMNI_FFI_DISPATCH_HOOK(next);
+        // Restore - nested wnf() may have modified WNF_S_POS, but our local
+        // s_pos is still valid because nested calls only pop to their base.
+        WNF_S_POS = saved_s_pos;
+        if (dispatched != next) {
+          next = dispatched;
+          goto enter;
+        }
+        #endif
         whnf = next;
         goto apply;
       }
@@ -269,6 +290,11 @@ __attribute__((hot)) fn Term wnf(Term term) {
 
     while (s_pos > base) {
       Term frame = stack[--s_pos];
+
+      #ifdef OMNI_DEBUG_USE_VAL
+      fprintf(stderr, "[FRAME POP] frame_tag=%d whnf_tag=%d whnf_ext=%u whnf_val=%u\n",
+              term_tag(frame), term_tag(whnf), term_ext(whnf), term_val(whnf));
+      #endif
 
       switch (term_tag(frame)) {
         // -----------------------------------------------------------------------
@@ -297,7 +323,15 @@ __attribute__((hot)) fn Term wnf(Term term) {
               continue;
             }
             case LAM: {
+              #ifdef OMNI_DEBUG_USE_VAL
+              fprintf(stderr, "[APP-LAM] lam_ext=%u arg_tag=%d arg_val=%u\n",
+                      term_ext(whnf), term_tag(arg), term_val(arg));
+              #endif
               next = wnf_app_lam(whnf, arg);
+              #ifdef OMNI_DEBUG_USE_VAL
+              fprintf(stderr, "[APP-LAM] result tag=%d ext=%u val=%u\n",
+                      term_tag(next), term_ext(next), term_val(next));
+              #endif
               goto enter;
             }
             case SUP: {
@@ -556,7 +590,15 @@ __attribute__((hot)) fn Term wnf(Term term) {
               goto enter;
             }
             default: {
+              #ifdef OMNI_DEBUG_USE_VAL
+              fprintf(stderr, "[USE-VAL] whnf tag=%d ext=%u val=%u\n",
+                      term_tag(whnf), term_ext(whnf), term_val(whnf));
+              #endif
               next = wnf_use_val(use, whnf);
+              #ifdef OMNI_DEBUG_USE_VAL
+              fprintf(stderr, "[USE-VAL] result tag=%d ext=%u val=%u\n",
+                      term_tag(next), term_ext(next), term_val(next));
+              #endif
               goto enter;
             }
           }
